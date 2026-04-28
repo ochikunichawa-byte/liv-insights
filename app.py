@@ -1,6 +1,7 @@
 import html
 import re
 import warnings
+from datetime import datetime
 from difflib import SequenceMatcher
 
 import numpy as np
@@ -36,6 +37,14 @@ ANALYSIS_MODES = [
     "Financial Data",
     "Marketing Analysis",
 ]
+MODE_DESCRIPTIONS = {
+    "General Analytics": "Broad patterns, trends, quality checks, and relationships.",
+    "Business Analytics": "Performance, operations, efficiency, trends, and decision-making.",
+    "Customer Insights": "Customers, segments, retention, satisfaction, behavior, and churn signals.",
+    "Financial Data": "Revenue, costs, spending, margins, financial risk, and performance.",
+    "Marketing Analysis": "Campaigns, engagement, conversion, channels, and audience behavior.",
+}
+GITHUB_URL = "https://github.com/ochikunichawa-byte/liv-insights"
 
 
 def apply_theme():
@@ -95,6 +104,21 @@ def apply_theme():
         }}
         .insight-card strong {{
             color: {INK_COLOR};
+        }}
+        .insight-card.correlation {{
+            border-left-color: #2563eb;
+        }}
+        .insight-card.trend {{
+            border-left-color: #16803c;
+        }}
+        .insight-card.risk {{
+            border-left-color: #d97706;
+        }}
+        .insight-card.category {{
+            border-left-color: #7c3aed;
+        }}
+        .insight-card.general {{
+            border-left-color: {THEME_COLOR};
         }}
         .small-muted {{
             color: #222222;
@@ -187,6 +211,55 @@ def apply_theme():
             color: #111111;
             font-weight: 800;
         }}
+        .landing-hero {{
+            background: #ffffff;
+            border: 1px solid #dfe7ef;
+            border-radius: 8px;
+            padding: 28px;
+            box-shadow: 0 6px 18px rgba(22, 50, 79, 0.08);
+            margin-bottom: 18px;
+        }}
+        .landing-hero h2 {{
+            color: {INK_COLOR};
+            margin-top: 0;
+            font-size: 30px;
+            letter-spacing: 0;
+        }}
+        .landing-hero p {{
+            color: #222222;
+            font-size: 17px;
+            line-height: 1.5;
+        }}
+        .output-meta {{
+            color: #334155;
+            background: #ffffff;
+            border: 1px solid #dfe7ef;
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin: 8px 0 16px 0;
+            font-weight: 700;
+        }}
+        .responsible-note {{
+            color: #64748b;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 9px 11px;
+            font-size: 13px;
+            margin-top: 8px;
+        }}
+        .footer {{
+            color: #334155;
+            border-top: 1px solid #dfe7ef;
+            margin-top: 34px;
+            padding-top: 16px;
+            font-size: 14px;
+        }}
+        .footer a {{
+            color: {THEME_COLOR};
+            font-weight: 800;
+            text-decoration: none;
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -211,19 +284,60 @@ def show_banner():
     )
 
 
-def insight_card(title, body):
+def card_kind(title):
+    """Choose a card accent color based on the insight title."""
+    title_text = str(title).lower()
+    if "correlation" in title_text or "relationship" in title_text or "driver" in title_text:
+        return "correlation"
+    if "trend" in title_text or "time" in title_text:
+        return "trend"
+    if "risk" in title_text or "warning" in title_text or "quality" in title_text or "outlier" in title_text:
+        return "risk"
+    if "category" in title_text or "segment" in title_text or "common" in title_text:
+        return "category"
+    return "general"
+
+
+def insight_card(title, body, kind=None):
     """Render a friendly plain-English insight card."""
     safe_title = html.escape(str(title))
     safe_body = html.escape(str(body))
+    safe_kind = kind or card_kind(title)
     st.markdown(
         f"""
-        <div class="insight-card">
+        <div class="insight-card {safe_kind}">
             <strong>{safe_title}</strong>
             <div class="small-muted">{safe_body}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def analysis_timestamp():
+    """Return a readable timestamp for major outputs."""
+    return datetime.now().strftime("%Y-%m-%d %I:%M %p")
+
+
+def dataset_label():
+    """Return the uploaded dataset name when available."""
+    return st.session_state.get("file_name") or "uploaded dataset"
+
+
+def output_meta():
+    """Show dataset name and timestamp near major outputs."""
+    st.markdown(
+        f'<div class="output-meta">Analysis of {html.escape(dataset_label())} — {analysis_timestamp()}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def safe_report_filename():
+    """Create a deployment-safe report filename."""
+    raw_name = st.session_state.get("file_name") or "uploaded_dataset"
+    base_name = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_name.rsplit(".", 1)[0]).strip("_")
+    date_text = datetime.now().strftime("%Y-%m-%d")
+    return f"Liv_Insights_Report_{base_name}_{date_text}.md"
 
 
 def read_uploaded_file(uploaded_file):
@@ -894,6 +1008,24 @@ def insights_markdown(df, detected_types, date_versions, outliers, corr, quality
     for title, body in cards:
         lines.append(f"- {title}: {body}")
 
+    lines.extend(["", "## Numeric Summary"])
+    numeric_stats = numeric_summary(df, detected_types["Numeric"])
+    if numeric_stats.empty:
+        lines.append("- No numeric columns found.")
+    else:
+        lines.append("```text")
+        lines.append(numeric_stats.to_string())
+        lines.append("```")
+
+    lines.extend(["", "## Category Summary"])
+    category_stats = categorical_summary(df, detected_types["Categorical"])
+    if category_stats.empty:
+        lines.append("- No categorical columns found.")
+    else:
+        lines.append("```text")
+        lines.append(category_stats.to_string(index=False))
+        lines.append("```")
+
     lines.extend(["", "## Explain My Data"])
     for title, body in explanation_cards:
         lines.append(f"- {title}: {body}")
@@ -1263,6 +1395,7 @@ def show_upload_section(df, detected_types):
     """Render upload preview and column type information."""
     st.header("Upload Data")
     st.write("Preview your uploaded dataset and confirm the detected column types.")
+    show_analysis_mode_selector("upload")
 
     preview_rows = st.slider("Rows to preview", min_value=5, max_value=10, value=5)
     st.dataframe(df.head(preview_rows), use_container_width=True)
@@ -1345,8 +1478,14 @@ def show_data_health_section(df, detected_types, date_versions, outliers):
 def show_insights_section(df, detected_types, date_versions, outliers, corr, quality, mode):
     """Render plain-English insight cards."""
     st.header("Insights")
+    output_meta()
     st.write("Review the most important patterns, warnings, and decision clues found in your dataset.")
     cards = generate_insights(df, detected_types, date_versions, outliers, corr, quality, mode)
+    st.metric(
+        "Insights generated",
+        f"{len(cards)}",
+        f"from {df.shape[0]:,} rows across {df.shape[1]:,} columns",
+    )
 
     for title, body in cards:
         insight_card(title, body)
@@ -1366,15 +1505,19 @@ def show_insights_section(df, detected_types, date_versions, outliers, corr, qua
 def show_explain_section(df, detected_types, date_versions, outliers, corr, quality, mode):
     """Render an AI-style explanation created locally from the data profile."""
     st.header("Explain My Data")
+    output_meta()
     st.write("A friendly business-analyst style explanation generated from your data, with no external API required.")
 
     for title, body in explain_my_data(df, detected_types, date_versions, outliers, corr, quality, mode):
         insight_card(title, body)
 
+    show_full_report_download(df, detected_types, date_versions, outliers, corr, quality, mode)
+
 
 def show_recommended_actions_section(df, detected_types, date_versions, outliers, corr, quality, mode):
     """Render practical next actions."""
     st.header("Recommended Next Actions")
+    output_meta()
     st.write("Use these next steps to turn the analysis into practical decisions.")
 
     for action in recommended_actions(df, detected_types, date_versions, outliers, corr, quality, mode):
@@ -1400,6 +1543,25 @@ def show_export_buttons(df, detected_types, date_versions, outliers, corr, quali
         "Download insights summary as Markdown",
         data=summary_text,
         file_name="liv_insights_summary.md",
+        mime="text/markdown",
+    )
+
+
+def show_full_report_download(df, detected_types, date_versions, outliers, corr, quality, mode):
+    """Render the full judge-facing report download button."""
+    target_column = detected_types["Numeric"][0] if detected_types["Numeric"] else None
+    report = insights_markdown(df, detected_types, date_versions, outliers, corr, quality, mode, target_column)
+    dataset_name = st.session_state.get("file_name") or "uploaded dataset"
+    report = (
+        f"# Liv Insights Full Report\n\n"
+        f"Dataset name: {dataset_name}\n\n"
+        f"Timestamp: {analysis_timestamp()}\n\n"
+        f"{report}"
+    )
+    st.download_button(
+        "Download Full Liv Insights Report",
+        data=report,
+        file_name=safe_report_filename(),
         mime="text/markdown",
     )
 
@@ -1475,6 +1637,7 @@ def show_correlation_section(df, numeric_columns, corr):
 def show_visualizations(df, selected_columns, detected_types, date_versions, corr):
     """Show chart options that match the selected columns."""
     st.header("Visualizations")
+    output_meta()
     st.write("Choose the columns and chart type that best match the question you want to answer.")
 
     selected_numeric = [col for col in selected_columns if col in detected_types["Numeric"]]
@@ -1544,6 +1707,7 @@ def show_visualizations(df, selected_columns, detected_types, date_versions, cor
 def show_ask_liv_section(df, detected_types):
     """Render the local natural-language question interface."""
     st.header("Ask Liv Insights")
+    output_meta()
     st.write("Ask simple questions about your uploaded dataset. This uses local rule-based analysis, not a paid API.")
 
     examples = ask_examples(detected_types)
@@ -1567,6 +1731,10 @@ def show_ask_liv_section(df, detected_types):
     insight_card("Interpreted action", response["action"])
     insight_card("Result", response["result"])
     insight_card("Explanation", response["explanation"])
+    st.markdown(
+        '<div class="responsible-note">This analysis is based on statistical patterns in your data. Always verify findings before making business decisions.</div>',
+        unsafe_allow_html=True,
+    )
 
     if "regression" in response:
         regression = response["regression"]
@@ -1595,9 +1763,10 @@ def show_ask_liv_section(df, detected_types):
         st.plotly_chart(clean_figure(fig), use_container_width=True)
 
 
-def show_questions_section(detected_types, mode):
+def show_questions_section(df, detected_types, mode):
     """Render suggested questions."""
     st.header("Suggested Questions")
+    output_meta()
     st.write("Use these prompts to guide your next round of analysis.")
     questions = generate_questions(detected_types, mode)
 
@@ -1605,8 +1774,88 @@ def show_questions_section(detected_types, mode):
         st.info("No suggested questions could be generated from the detected column types.")
         return
 
-    for question in questions:
-        insight_card("Try asking", question)
+    for index, question in enumerate(questions):
+        col_question, col_button = st.columns([4, 1])
+        with col_question:
+            insight_card("Try asking", question)
+        with col_button:
+            if st.button("Ask this", key=f"ask_suggested_{index}"):
+                st.session_state.suggested_answer = question
+
+    selected_question = st.session_state.get("suggested_answer")
+    if selected_question:
+        st.subheader("Answer")
+        response = ask_liv_response(selected_question, df, detected_types)
+        insight_card("Interpreted action", response["action"])
+        insight_card("Result", response["result"])
+        insight_card("Explanation", response["explanation"])
+        st.markdown(
+            '<div class="responsible-note">This analysis is based on statistical patterns in your data. Always verify findings before making business decisions.</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def show_analysis_mode_selector(location):
+    """Show a synced Analysis Mode selector."""
+    st.subheader("Choose your analysis lens")
+    st.write("Select the context you want Liv Insights to use when framing insights and recommendations.")
+    current_mode = st.session_state.get("analysis_mode", "General Analytics")
+    selected_mode = st.selectbox(
+        "Analysis Mode",
+        ANALYSIS_MODES,
+        index=ANALYSIS_MODES.index(current_mode),
+        key=f"analysis_mode_{location}",
+    )
+    st.session_state.analysis_mode = selected_mode
+
+    for mode_name in ANALYSIS_MODES:
+        prefix = "Selected" if mode_name == selected_mode else "Mode"
+        insight_card(f"{prefix}: {mode_name}", MODE_DESCRIPTIONS[mode_name], kind="general")
+
+    return selected_mode
+
+
+def show_landing_screen():
+    """Show a strong first impression before data is uploaded."""
+    st.markdown(
+        """
+        <div class="landing-hero">
+            <h2>Upload any spreadsheet. Get instant AI-powered insights, data health scores, visualizations, and business recommendations — in seconds.</h2>
+            <p>Liv Insights turns CSV and Excel files into clear analysis without setup, formulas, or paid APIs.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        insight_card("Data Health Score", "Spot missing values, duplicates, data type issues, and outliers.", kind="risk")
+    with col_b:
+        insight_card("AI Business Insights", "Get plain-English explanations, recommendations, and decision prompts.", kind="general")
+    with col_c:
+        insight_card("5 Chart Types", "Create histograms, bars, scatter plots, lines, and correlation heatmaps.", kind="trend")
+
+    st.subheader("How it works")
+    step_cols = st.columns(3)
+    step_cols[0].markdown("**Step 1:** Upload your CSV or Excel file")
+    step_cols[1].markdown("**Step 2:** Choose your analysis lens")
+    step_cols[2].markdown("**Step 3:** Explore insights, charts, and recommendations")
+
+    with st.expander("See example output"):
+        insight_card("Data Quality Score", "Your dataset quality score is 92/100. This means the file is mostly clean and ready for analysis.", kind="risk")
+        insight_card("Business Insight", "Revenue appears to rise with order volume, suggesting larger order activity may be linked with stronger performance.", kind="correlation")
+        insight_card("Recommended action", "Review missing customer segment values, then compare performance by segment before making campaign decisions.", kind="general")
+
+    show_analysis_mode_selector("landing")
+    st.info("Upload a dataset from the sidebar to begin.")
+
+
+def show_footer():
+    """Render a professional footer."""
+    st.markdown(
+        f'<div class="footer">Liv Insights | Built with Python, Streamlit, and AI-assisted development | <a href="{GITHUB_URL}" target="_blank">GitHub</a></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def sidebar_navigation():
@@ -1643,8 +1892,7 @@ def initialize_session_state():
 
 def show_upload_prompt():
     """Show the upload message only when no dataset is stored."""
-    st.header("Upload Data")
-    st.info("Upload a dataset from the sidebar to begin.")
+    show_landing_screen()
 
 
 def main():
@@ -1682,6 +1930,7 @@ def main():
 
     if df is None:
         show_upload_prompt()
+        show_footer()
         return
 
     if st.session_state.get("file_name"):
@@ -1718,7 +1967,9 @@ def main():
     elif section == "Recommended Actions":
         show_recommended_actions_section(df, detected_types, date_versions, outliers, corr, quality, mode)
     elif section == "Suggested Questions":
-        show_questions_section(detected_types, mode)
+        show_questions_section(df, detected_types, mode)
+
+    show_footer()
 
 
 if __name__ == "__main__":

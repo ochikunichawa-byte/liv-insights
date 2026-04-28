@@ -6,9 +6,11 @@ The app does not require an OpenAI API key or any paid external service. All ins
 
 ## Features
 
+- Judge-friendly landing screen with a product overview, how-it-works steps, and example output preview
 - Upload CSV or XLSX files
 - Preview uploaded data
 - Keep uploaded data available across sections with Streamlit session state
+- Prominent Analysis Mode selector on the main screen and sidebar
 - Detect column types automatically:
   - Numeric
   - Categorical
@@ -30,6 +32,7 @@ The app does not require an OpenAI API key or any paid external service. All ins
 - Run correlation analysis and Top Drivers analysis
 - Ask natural-language questions about the uploaded dataset with Ask Liv Insights
 - Run simple linear regression from questions such as "Predict target using predictor"
+- Click suggested questions and answer them with the Ask Liv Insights engine
 - Explain the dataset in plain English without an external API
 - Generate recommended next actions
 - Generate suggested questions
@@ -42,6 +45,10 @@ The app does not require an OpenAI API key or any paid external service. All ins
 - Export:
   - Cleaned dataset as CSV
   - Insights summary as Markdown
+  - Full Liv Insights report as Markdown
+- Dataset name and timestamp on major output pages
+- Responsible interpretation notes for statistical answers
+- Professional footer with GitHub link
 
 ## How To Run Locally
 
