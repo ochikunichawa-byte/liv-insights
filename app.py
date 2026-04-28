@@ -1,5 +1,7 @@
 import html
+import re
 import warnings
+from difflib import SequenceMatcher
 
 import numpy as np
 import pandas as pd
@@ -23,6 +25,7 @@ NAV_ITEMS = [
     ("Insights", "💡"),
     ("Explain My Data", "📝"),
     ("Visualizations", "📊"),
+    ("Ask Liv Insights", "AI"),
     ("Recommended Actions", "✅"),
     ("Suggested Questions", "❓"),
 ]
@@ -905,6 +908,310 @@ def insights_markdown(df, detected_types, date_versions, outliers, corr, quality
     return "\n".join(lines)
 
 
+def normalize_text(text):
+    """Normalize text so column matching handles case, spaces, and underscores."""
+    return re.sub(r"[^a-z0-9]+", " ", str(text).lower().replace("_", " ")).strip()
+
+
+def mentioned_columns(question, columns):
+    """Find dataset columns mentioned in a question."""
+    normalized_question = f" {normalize_text(question)} "
+    matches = []
+
+    for column in columns:
+        normalized_column = normalize_text(column)
+        if normalized_column and f" {normalized_column} " in normalized_question:
+            matches.append(column)
+
+    return sorted(matches, key=lambda value: len(str(value)), reverse=True)
+
+
+def closest_column_suggestion(question, columns):
+    """Suggest the closest column name when a question has a small typo."""
+    words = normalize_text(question).split()
+    best_score = 0
+    best_column = None
+
+    for column in columns:
+        normalized_column = normalize_text(column)
+        column_word_count = max(len(normalized_column.split()), 1)
+
+        for index in range(len(words)):
+            candidate = " ".join(words[index : index + column_word_count])
+            score = SequenceMatcher(None, candidate, normalized_column).ratio()
+            if score > best_score:
+                best_score = score
+                best_column = column
+
+    return best_column if best_score >= 0.72 else None
+
+
+def ask_examples(detected_types):
+    """Create example natural-language questions from actual columns."""
+    examples = ["How many rows are in this dataset?"]
+    numeric_columns = detected_types["Numeric"]
+    categorical_columns = detected_types["Categorical"]
+
+    if numeric_columns:
+        examples.extend(
+            [
+                f"What is the mean of {numeric_columns[0]}?",
+                f"What is the maximum of {numeric_columns[0]}?",
+                f"What is the minimum of {numeric_columns[0]}?",
+                f"How many missing values are in {numeric_columns[0]}?",
+                f"How many unique values are in {numeric_columns[0]}?",
+            ]
+        )
+
+    if len(numeric_columns) >= 2:
+        examples.extend(
+            [
+                f"What is the correlation between {numeric_columns[0]} and {numeric_columns[1]}?",
+                f"Run regression between {numeric_columns[0]} and {numeric_columns[1]}",
+                f"Predict {numeric_columns[0]} using {numeric_columns[1]}",
+            ]
+        )
+
+    if categorical_columns:
+        examples.append(f"Which value appears most often in {categorical_columns[0]}?")
+
+    return examples[:8]
+
+
+def regression_result(df, target_column, predictor_column):
+    """Run simple linear regression with NumPy and return metrics plus chart data."""
+    model_df = pd.DataFrame(
+        {
+            predictor_column: pd.to_numeric(df[predictor_column], errors="coerce"),
+            target_column: pd.to_numeric(df[target_column], errors="coerce"),
+        }
+    ).dropna()
+
+    if len(model_df) < 2 or model_df[predictor_column].nunique() < 2:
+        return None
+
+    x_values = model_df[predictor_column].to_numpy()
+    y_values = model_df[target_column].to_numpy()
+    slope, intercept = np.polyfit(x_values, y_values, 1)
+    predictions = slope * x_values + intercept
+    residual_sum = np.sum((y_values - predictions) ** 2)
+    total_sum = np.sum((y_values - np.mean(y_values)) ** 2)
+    r_squared = 1 - (residual_sum / total_sum) if total_sum != 0 else 0
+
+    line_df = pd.DataFrame(
+        {
+            predictor_column: np.linspace(np.min(x_values), np.max(x_values), 100),
+        }
+    )
+    line_df[target_column] = slope * line_df[predictor_column] + intercept
+
+    return {
+        "rows_used": len(model_df),
+        "slope": slope,
+        "intercept": intercept,
+        "r_squared": r_squared,
+        "data": model_df,
+        "line": line_df,
+    }
+
+
+def ask_liv_response(question, df, detected_types):
+    """Answer simple natural-language questions with rule-based intent detection."""
+    question_clean = normalize_text(question)
+    columns = list(df.columns)
+    matches = mentioned_columns(question, columns)
+    numeric_columns = detected_types["Numeric"]
+
+    if not question_clean:
+        return None
+
+    if "row" in question_clean and ("count" in question_clean or "how many" in question_clean):
+        return {
+            "action": "Count rows",
+            "result": f"This dataset has {df.shape[0]:,} rows.",
+            "explanation": "Each row usually represents one record, event, transaction, or observation.",
+        }
+
+    if "missing" in question_clean:
+        if matches:
+            column = matches[0]
+            count = int(df[column].isna().sum())
+            return {
+                "action": f"Missing values in {column}",
+                "result": f"{column} has {count:,} missing value(s).",
+                "explanation": "Missing values can reduce confidence if they affect an important field.",
+            }
+        suggestion = closest_column_suggestion(question, columns)
+        if suggestion:
+            count = int(df[suggestion].isna().sum())
+            return {
+                "action": f"Missing values in {suggestion}",
+                "result": f"{suggestion} has {count:,} missing value(s).",
+                "explanation": f"I matched your question to the closest column name: {suggestion}.",
+            }
+        return {
+            "action": "Total missing values",
+            "result": f"The dataset has {int(df.isna().sum().sum()):,} missing value(s) across all columns.",
+            "explanation": "Review missing values before using the data for important decisions.",
+        }
+
+    is_regression = (
+        "regression" in question_clean
+        or "predict" in question_clean
+        or ("relationship" in question_clean and len(matches) >= 2)
+    )
+    if is_regression:
+        if len(matches) < 2:
+            suggestion = closest_column_suggestion(question, columns)
+            message = "I need two numeric columns for regression."
+            if suggestion:
+                message += f" Did you mean {suggestion}?"
+            return {"action": "Regression analysis", "result": message, "explanation": "Try: Predict target_column using predictor_column."}
+
+        target_column, predictor_column = matches[0], matches[1]
+        if "predict" in question_clean and "using" in question_clean:
+            before_using, after_using = question.lower().split("using", 1)
+            target_matches = mentioned_columns(before_using, columns)
+            predictor_matches = mentioned_columns(after_using, columns)
+            if target_matches and predictor_matches:
+                target_column, predictor_column = target_matches[0], predictor_matches[0]
+
+        if target_column not in numeric_columns or predictor_column not in numeric_columns:
+            return {
+                "action": "Regression analysis",
+                "result": "Regression only works when both selected columns are numeric.",
+                "explanation": f"I found {target_column} and {predictor_column}, but both must be numeric for this calculation.",
+            }
+
+        result = regression_result(df, target_column, predictor_column)
+        if result is None:
+            return {
+                "action": f"Regression: {target_column} using {predictor_column}",
+                "result": "There is not enough usable numeric variation to run this regression.",
+                "explanation": "Try two numeric columns with at least a few different values.",
+            }
+
+        slope = result["slope"]
+        intercept = result["intercept"]
+        r_squared = result["r_squared"]
+        return {
+            "action": f"Regression: {target_column} using {predictor_column}",
+            "result": f"Equation: {target_column} = {slope:.4f} * {predictor_column} + {intercept:.4f}",
+            "explanation": (
+                f"A one-unit increase in {predictor_column} is associated with an estimated "
+                f"{slope:.4f} unit change in {target_column}. The R-squared is {r_squared:.2f}, "
+                f"meaning the model explains about {r_squared * 100:.0f}% of the variation. "
+                "Regression shows association, not causation."
+            ),
+            "regression": result,
+            "target_column": target_column,
+            "predictor_column": predictor_column,
+        }
+
+    if "correlation" in question_clean:
+        if len(matches) < 2:
+            return {
+                "action": "Correlation",
+                "result": "I need two numeric columns to calculate correlation.",
+                "explanation": "Try asking: What is the correlation between column A and column B?",
+            }
+        left_column, right_column = matches[0], matches[1]
+        if left_column not in numeric_columns or right_column not in numeric_columns:
+            return {
+                "action": "Correlation",
+                "result": "Correlation only works when both selected columns are numeric.",
+                "explanation": f"I found {left_column} and {right_column}, but both must be numeric.",
+            }
+        value = pd.to_numeric(df[left_column], errors="coerce").corr(pd.to_numeric(df[right_column], errors="coerce"))
+        return {
+            "action": f"Correlation between {left_column} and {right_column}",
+            "result": f"The correlation is {value:.3f}.",
+            "explanation": "Values near 1 move together, values near -1 move in opposite directions, and values near 0 have little linear relationship.",
+        }
+
+    if not matches:
+        suggestion = closest_column_suggestion(question, columns)
+        single_column_intent = any(
+            term in question_clean
+            for term in ["mean", "average", "median", "sum", "total", "minimum", "maximum", "unique", "mode", "common"]
+        ) or "min" in question_clean.split() or "max" in question_clean.split()
+        if suggestion and single_column_intent:
+            matches = [suggestion]
+        else:
+            explanation = "Try asking about mean, max, correlation, or regression."
+            if suggestion:
+                explanation += f" Closest column match: {suggestion}."
+            return {
+                "action": "Question not understood",
+                "result": "I couldn't understand that yet. Try asking about mean, max, correlation, or regression.",
+                "explanation": explanation,
+            }
+
+    column = matches[0]
+    if "unique" in question_clean:
+        count = int(df[column].nunique(dropna=True))
+        return {
+            "action": f"Unique values in {column}",
+            "result": f"{column} has {count:,} unique non-missing value(s).",
+            "explanation": "Unique counts help show how much variety exists in a column.",
+        }
+
+    if any(term in question_clean for term in ["most common", "mode", "appears most", "frequent"]):
+        counts = df[column].value_counts(dropna=True)
+        if counts.empty:
+            result = f"{column} does not have a most common non-missing value."
+        else:
+            result = f"The most common value in {column} is {counts.index[0]} with {counts.iloc[0]:,} row(s)."
+        return {
+            "action": f"Most common value in {column}",
+            "result": result,
+            "explanation": "The most common value can reveal the dominant group or repeated value.",
+        }
+
+    if column not in numeric_columns:
+        return {
+            "action": f"Analyze {column}",
+            "result": "This question needs a numeric column, but the selected column is not numeric.",
+            "explanation": "For category columns, try asking about most common or unique values.",
+        }
+
+    values = pd.to_numeric(df[column], errors="coerce").dropna()
+    if values.empty:
+        return {
+            "action": f"Analyze {column}",
+            "result": f"{column} does not have usable numeric values.",
+            "explanation": "Try a different numeric column.",
+        }
+
+    if any(term in question_clean for term in ["mean", "average"]):
+        value = values.mean()
+        action = f"Mean of {column}"
+    elif "median" in question_clean:
+        value = values.median()
+        action = f"Median of {column}"
+    elif any(term in question_clean for term in ["sum", "total"]):
+        value = values.sum()
+        action = f"Sum of {column}"
+    elif "minimum" in question_clean or "min" in question_clean.split():
+        value = values.min()
+        action = f"Minimum of {column}"
+    elif "maximum" in question_clean or "max" in question_clean.split():
+        value = values.max()
+        action = f"Maximum of {column}"
+    else:
+        return {
+            "action": "Question not understood",
+            "result": "I couldn't understand that yet. Try asking about mean, max, correlation, or regression.",
+            "explanation": "Examples below are generated from your uploaded dataset.",
+        }
+
+    return {
+        "action": action,
+        "result": f"{action}: {value:,.4f}",
+        "explanation": f"I calculated this using the non-missing numeric values in {column}.",
+    }
+
+
 def clean_figure(fig):
     """Apply a consistent Plotly style."""
     fig.update_layout(
@@ -1234,6 +1541,60 @@ def show_visualizations(df, selected_columns, detected_types, date_versions, cor
         show_correlation_section(df, detected_types["Numeric"], corr)
 
 
+def show_ask_liv_section(df, detected_types):
+    """Render the local natural-language question interface."""
+    st.header("Ask Liv Insights")
+    st.write("Ask simple questions about your uploaded dataset. This uses local rule-based analysis, not a paid API.")
+
+    examples = ask_examples(detected_types)
+
+    st.subheader("Example questions")
+    for example in examples:
+        st.caption(example)
+
+    question = st.text_input("Ask a question about your data", key="ask_liv_question")
+
+    if not question:
+        st.info("Try one of the example questions above, or ask about mean, max, missing values, correlation, or regression.")
+        return
+
+    response = ask_liv_response(question, df, detected_types)
+
+    if response is None:
+        st.info("I couldn't understand that yet. Try asking about mean, max, correlation, or regression.")
+        return
+
+    insight_card("Interpreted action", response["action"])
+    insight_card("Result", response["result"])
+    insight_card("Explanation", response["explanation"])
+
+    if "regression" in response:
+        regression = response["regression"]
+        target_column = response["target_column"]
+        predictor_column = response["predictor_column"]
+
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Slope", f"{regression['slope']:.4f}")
+        metric_cols[1].metric("Intercept", f"{regression['intercept']:.4f}")
+        metric_cols[2].metric("R-squared", f"{regression['r_squared']:.2f}")
+        metric_cols[3].metric("Rows Used", f"{regression['rows_used']:,}")
+
+        fig = px.scatter(
+            regression["data"],
+            x=predictor_column,
+            y=target_column,
+            title=f"Regression: {target_column} using {predictor_column}",
+        )
+        fig.add_scatter(
+            x=regression["line"][predictor_column],
+            y=regression["line"][target_column],
+            mode="lines",
+            name="Regression line",
+            line=dict(color=ACCENT_COLOR, width=3),
+        )
+        st.plotly_chart(clean_figure(fig), use_container_width=True)
+
+
 def show_questions_section(detected_types, mode):
     """Render suggested questions."""
     st.header("Suggested Questions")
@@ -1352,6 +1713,8 @@ def main():
             show_visualizations(df, selected_columns, detected_types, date_versions, corr)
         else:
             st.info("Select one or more columns to generate visualizations.")
+    elif section == "Ask Liv Insights":
+        show_ask_liv_section(df, detected_types)
     elif section == "Recommended Actions":
         show_recommended_actions_section(df, detected_types, date_versions, outliers, corr, quality, mode)
     elif section == "Suggested Questions":
