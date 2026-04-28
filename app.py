@@ -230,6 +230,23 @@ def apply_theme():
             font-size: 17px;
             line-height: 1.5;
         }}
+        .landing-subline {{
+            color: #334155;
+            font-size: 18px;
+            font-weight: 800;
+            margin: 6px 0 10px 0;
+        }}
+        .how-it-works {{
+            background: #ffffff;
+            border: 1px solid #dfe7ef;
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 4px 12px rgba(22, 50, 79, 0.06);
+        }}
+        .how-it-works p {{
+            color: #111111;
+            font-weight: 700;
+        }}
         .output-meta {{
             color: #334155;
             background: #ffffff;
@@ -1807,10 +1824,7 @@ def show_analysis_mode_selector(location):
         key=f"analysis_mode_{location}",
     )
     st.session_state.analysis_mode = selected_mode
-
-    for mode_name in ANALYSIS_MODES:
-        prefix = "Selected" if mode_name == selected_mode else "Mode"
-        insight_card(f"{prefix}: {mode_name}", MODE_DESCRIPTIONS[mode_name], kind="general")
+    insight_card(f"Selected: {selected_mode}", MODE_DESCRIPTIONS[selected_mode], kind="general")
 
     return selected_mode
 
@@ -1821,12 +1835,14 @@ def show_landing_screen():
         """
         <div class="landing-hero">
             <h2>Upload any spreadsheet. Get instant AI-powered insights, data health scores, visualizations, and business recommendations — in seconds.</h2>
+            <div class="landing-subline">No coding. No setup. Just upload and explore.</div>
             <p>Liv Insights turns CSV and Excel files into clear analysis without setup, formulas, or paid APIs.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    st.markdown("<br>", unsafe_allow_html=True)
     col_a, col_b, col_c = st.columns(3)
     with col_a:
         insight_card("Data Health Score", "Spot missing values, duplicates, data type issues, and outliers.", kind="risk")
@@ -1835,18 +1851,23 @@ def show_landing_screen():
     with col_c:
         insight_card("5 Chart Types", "Create histograms, bars, scatter plots, lines, and correlation heatmaps.", kind="trend")
 
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="how-it-works">', unsafe_allow_html=True)
     st.subheader("How it works")
     step_cols = st.columns(3)
     step_cols[0].markdown("**Step 1:** Upload your CSV or Excel file")
     step_cols[1].markdown("**Step 2:** Choose your analysis lens")
     step_cols[2].markdown("**Step 3:** Explore insights, charts, and recommendations")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     with st.expander("See example output"):
         insight_card("Data Quality Score", "Your dataset quality score is 92/100. This means the file is mostly clean and ready for analysis.", kind="risk")
         insight_card("Business Insight", "Revenue appears to rise with order volume, suggesting larger order activity may be linked with stronger performance.", kind="correlation")
         insight_card("Recommended action", "Review missing customer segment values, then compare performance by segment before making campaign decisions.", kind="general")
 
+    st.markdown("<br>", unsafe_allow_html=True)
     show_analysis_mode_selector("landing")
+    st.markdown("<br>", unsafe_allow_html=True)
     st.info("Upload a dataset from the sidebar to begin.")
 
 
